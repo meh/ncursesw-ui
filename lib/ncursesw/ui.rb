@@ -64,9 +64,9 @@ class UI
 
             if refresh
                 self.refresh
-            end
 
-            @UI.input.focus!
+                @UI.input.focus!
+            end
         end
 
         def focused?
@@ -371,12 +371,6 @@ class UI
             Ncurses.nocbreak
         end
 
-        if options[:newline] == true
-            Ncurses.nl
-        elsif options[:newline] == false
-            Ncurses.nonl
-        end
-
         if !options[:input]
             options[:input] = {}
         end
@@ -403,10 +397,6 @@ class UI
 
         if !options[:cbreak]
             Ncurses.nocbreak
-        end
-
-        if !options[:newline]
-            Ncurses.nl
         end
 
         @windows.each {|window|
