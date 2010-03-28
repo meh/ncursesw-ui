@@ -77,14 +77,20 @@ class UI
             @focused = value
 
             if value
+                @UI.focused = self
                 @raw.clear
                 @raw.mvaddstr(0, 0, self.buffer(@raw.getmaxy))
                 self.refresh
             end
         end
 
+        def focus!
+            self.focused = true
+        end
+
         def buffer (lines)
             @buffer
+            String.new
         end
 
         def refresh
@@ -382,6 +388,7 @@ class UI
         @windows  = []
         @statuses = []
 
+        (self.add(:window)).focus!
         @input = Input.new(self, options[:input])
     end
 
@@ -435,6 +442,8 @@ class UI
         elsif element.is_a?(Status)
             @statuses.push element
         end
+
+        return element
     end
 
     def top
