@@ -323,14 +323,22 @@ class UI
                     self.put char[:value]
                 else
                     if char[:value] == :ENTER
+                        if @data.empty?
+                            line = String.new
+                            break
+                        end
+
                         if @history.length > @max
                             @history.shift
                         end
 
-                        @history.push @data.clone
+                        if @history.last != @data
+                            @history.push @data.clone
+                        end
+
                         @UI.fire :input, @data.clone
                         line     = @data.clone
-                        @current = @history.length
+                        @current += 1
 
                         self.clear
                         break
@@ -356,8 +364,27 @@ class UI
                     elsif char[:value] == :END
                         @cursor = @data.length
                     elsif char[:value] == :UP
+                        if @current > 0
+                            if @current == @history.length && @history.last != @data && !@data.empty?
+                                @history.push @data
+                            end
 
+                            @current -= 1
+                            @data     = @history[@current].clone
+                            @cursor   = @data.length
+                        end
                     elsif char[:value] == :DOWN
+                        if @current < @history.length-1
+                            @current += 1
+                            @data     = @history[@current].clone
+                            @cursor   = @data.length
+                        else
+                            if !@data.empty?
+                                @current += 1
+                                @data     = String.new
+                                @cursor   = 0
+                            end
+                        end
                     end
 
                     self.refresh
