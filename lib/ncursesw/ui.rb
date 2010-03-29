@@ -132,7 +132,7 @@ class UI
     # non blocking getch.
     class Input
         attr_reader   :UI, :raw, :history
-        attr_accessor :utf8, :max
+        attr_accessor :utf8, :max, :prompt
 
         @@symbols = {
             :ALT       => 27,
@@ -148,10 +148,12 @@ class UI
             @UI    = ui
             @utf8  = (options[:utf8].nil?) ? true : options[:utf8]
 
-            @cursor  = 0
-            @data    = String.new
-            @history = []
-            @current = 0
+            @cursor   = 0
+            @position = 0
+            @data     = String.new
+            @history  = []
+            @current  = 0
+            @prompt   = String.new
 
             if options[:max]
                 @max = options[:max]
@@ -204,7 +206,9 @@ class UI
                 value = self.getch
             end
 
-            if value <= 26
+            case value
+
+            when 1 .. 26
                 if value == 10
                     value = :ENTER
                 elsif value == 9
@@ -213,6 +217,21 @@ class UI
                     result[:CTRL] = true
                     value += 64
                 end
+
+            when 31
+                result[:CTRL]  = true
+                result[:value] = '_'
+
+            end
+
+            if result[:CTRL]
+                if value.is_a?(Fixnum)
+                    result[:value] = value.chr.to_sym
+                else
+                    result[:value] = value
+                end
+
+                return result
             end
 
             case value
@@ -283,7 +302,7 @@ class UI
                     result[:value].force_encoding('ASCII-8BIT')
 
                     if self.utf8
-                        case Input.bin(value)
+                        case UI.bin(value)
 
                         when /^0/
                             result[:value].concat(value)
@@ -312,6 +331,7 @@ class UI
                 rescue
                     result[:value] = nil
                 end
+
             end
 
             return result
@@ -344,25 +364,26 @@ class UI
                         break
                     elsif char[:value] == :BACKSPACE
                         if @data.length > 0
-                            @data.sub!(/^(.{#{@cursor > 0 ? @cursor - 1 : 0}})./, '\1')
-                            @cursor -= 1
+                            self.deleteAt(@position - 1, true)
                         end
                     elsif char[:value] == :CANC
-                        if @cursor < @data.length
-                            @data.sub!(/^(.{#{@cursor}})./, '\1')
+                        if @position < @data.length
+                            self.deleteAt(@position)
                         end
                     elsif char[:value] == :LEFT
                         if @cursor > 0
                             @cursor -= 1
                         end
                     elsif char[:value] == :RIGHT
-                        if @cursor < @data.length
+                        if @cursor < UI.realLength(@data)
                             @cursor += 1
                         end
                     elsif char[:value] == :HOME
-                        @cursor = 0
+                        @cursor   = 0
+                        @position = 0
                     elsif char[:value] == :END
-                        @cursor = @data.length
+                        @cursor   = UI.realLength(@data)
+                        @position = @data.length
                     elsif char[:value] == :UP
                         if @current > 0
                             if @current == @history.length && @history.last != @data && !@data.empty?
@@ -371,20 +392,31 @@ class UI
 
                             @current -= 1
                             @data     = @history[@current].clone
-                            @cursor   = @data.length
+                            @cursor   = UI.realLength(@data)
+                            @position = @data.length
                         end
                     elsif char[:value] == :DOWN
                         if @current < @history.length-1
                             @current += 1
                             @data     = @history[@current].clone
-                            @cursor   = @data.length
+                            @cursor   = UI.realLength(@data)
+                            @position = @data.length
                         else
                             if !@data.empty?
                                 @current += 1
                                 @data     = String.new
                                 @cursor   = 0
+                                @position = 0
                             end
                         end
+                    elsif char[:value] == :C && char[:CTRL]
+                        self.put "\x03"
+                    elsif char[:value] == :B && char[:CTRL]
+                        self.put "\x02"
+                    elsif char[:value] == :V && char[:CTRL]
+                        self.put "\x16"
+                    elsif char[:value] == :_ && char[:CTRL]
+                        self.put "\x1F"
                     end
 
                     self.refresh
@@ -397,8 +429,14 @@ class UI
         end
 
         def put (value)
-            @data.insert(@cursor, value)
-            @cursor += 1
+            @data.insert(@position, value)
+
+            if !UI.isSpecial(@data, @position)
+                @cursor += 1
+            end
+
+            @position += 1
+
             self.refresh
 
             return value
@@ -406,9 +444,10 @@ class UI
 
         def clear
             @data.clear
-            @cursor = 0
+            @cursor   = 0
+            @position = 0
 
-            @raw.mvaddstr(0, 0, ' '*Ncurses.COLS)
+            @raw.mvaddstr(0, 0, ' ' * (self.size[:width] - @prompt.length))
             @raw.move(0, 0)
         end
 
@@ -416,53 +455,22 @@ class UI
             position = self.position
             size     = self.size
 
-            @raw.mvaddstr(0, 0, @data)
-            @raw.mvaddstr(0, Input.realLength(@data), ' ' * (size[:width] - Input.realLength(@data)))
-            @raw.move(0, Input.realCursor(@data, @cursor))
+            UI.mvaddstr(@raw, 0, 0, @data)
+            @raw.mvaddstr(0, UI.realLength(@data), ' ' * (size[:width] - UI.realLength(@data) - @prompt.length))
+            @raw.move(0, UI.realCursor(@data, @cursor))
         end
 
-        def self.realLength (string)
-            result = 0
-
-            string.each_char {|char|
-                char.force_encoding 'ASCII-8BIT'
-
-                if char.length > 1
-                    result += 2
-                else
-                    result += 1
-                end
-            }
-
-            return result
-        end
-
-        def self.realCursor (string, position)
-            result = 0
-            offset = 0
-
-            string.each_char {|char|
-                if offset >= position
-                    break
+        def deleteAt (position, change=false)
+            if position >= 0 && position < @data.length
+                if change && !UI.isSpecial(@data, position)
+                    @cursor   -= 1
+                    @position -= 1 
                 end
 
-                char.force_encoding 'ASCII-8BIT'
-
-                if char.length > 1
-                    result += 2
-                else
-                    result += 1
-                end
-
-                offset += 1
-            }
-
-            return result
+                @data[position, 1] = ''
+            end
         end
 
-        def self.bin (n)
-            [n].pack('C').unpack('B8')[0]
-        end
     end
 
     attr_reader   :input, :windows, :statutes, :options
@@ -470,6 +478,8 @@ class UI
 
     def initialize (options={})
         Ncurses.initscr
+
+        UI.initColors
 
         @options = options
 
@@ -625,6 +635,258 @@ class UI
 
             @handling = false
         }
+    end
+
+    @@colors = {
+        :White      => 0,
+        :Black      => 1,
+        :Blue       => 2,
+        :Green      => 3,
+        :LightRed   => 4,
+        :Red        => 5,
+        :Purple     => 6,
+        :Brown      => 7,
+        :Yellow     => 8,
+        :LightGreen => 9,
+        :Azure      => 10,
+        :Cyan       => 11,
+        :LightBlue  => 12,
+        :Magenta    => 13,
+        :Gray       => 14,
+        :LightGray  => 15,
+
+        # order is important
+        :Normal => [1, 5, 3, 7, 2, 6, 15],
+        :Light  => [14, 4, 9, 8, 12, 13, 0],
+
+        :Pairs => {},
+    }
+
+    def self.colors
+        @@colors
+    end
+
+    def self.color (*args)
+        if args.first.is_a?(Array)
+            fg, bg = args.shift
+        else
+            fg, bg = args
+        end
+
+        if fg.is_a?(String)
+            if fg.empty?
+                fg = -1
+            else
+                fg = fg.to_i
+            end
+        end
+
+        if bg.is_a?(String)
+            if bg.empty?
+                bg = -1
+            else
+                bg = bg.to_i
+            end
+        end
+
+        if !fg || fg < 0
+            fg = -1
+        else
+            fg %= 16
+        end
+
+        if !bg || bg < 0
+            bg = -1
+        else
+            bg %= 16
+        end
+
+        color = 0
+
+        if fgIndex = @@colors[:Light].index(fg)
+            color |= A_BOLD
+        else
+            fgIndex = @@colors[:Normal].index(fg) || -1
+        end
+
+        if bgIndex = @@colors[:Light].index(bg)
+            color |= A_BLINK
+        else
+            bgIndex = @@colors[:Normal].index(bg) || -1
+        end
+
+        if pair = @@colors[:Pairs][[fgIndex, bgIndex]]
+            color |= Ncurses.COLOR_PAIR(pair)
+        end
+
+        return color
+    end
+
+    def self.initColors
+        Ncurses.start_color
+        Ncurses.use_default_colors
+
+        offset = 1
+
+        (-1 .. 7).to_a.permutation(2).each {|pair|
+            Ncurses.init_pair(offset, pair[0], pair[1])
+
+            @@colors[:Pairs][pair] = offset
+            offset                += 1
+        }
+    end
+
+    def self.clean (string)
+        string = string.clone
+        string.gsub!(/[\x02\x16\x1F]/, '')
+        string.gsub!(/\x03((\d{1,2})?(,\d{1,2})?)?/, '')
+
+        return string
+    end
+
+    def self.isSpecial (string, position=0)
+        if string[position, 1].match(/^[,\d]$/)
+
+        else
+            string.match(/^.{#{position}}[\x02\x16\x1F]/) || string.match(/^.{#{position}}\x03((\d{1,2})?(,\d{1,2})?)?/)
+        end
+    end
+
+    def self.realLength (string)
+        string = UI.clean(string)
+        result = 0
+
+        string.each_char {|char|
+            char.force_encoding 'ASCII-8BIT'
+
+            if char.length > 1
+                result += 2
+            else
+                result += 1
+            end
+        }
+
+        return result
+    end
+
+   def self.realCursor (string, position)
+        string = UI.clean(string)
+        result = 0
+        offset = 0
+
+        string.each_char {|char|
+            if offset >= position
+                break
+            end
+
+            char.force_encoding 'ASCII-8BIT'
+
+            if char.length > 1
+                result += 2
+            else
+                result += 1
+            end
+
+            offset += 1
+        }
+
+        return result
+    end
+
+    def self.realPosition (string, position)
+        result = 0
+        offset = 0
+
+        string.each_char {|char|
+            if UI.isSpecial(char)
+
+            end
+        }
+
+        return result
+    end
+
+    def self.bin (n)
+        [n].pack('C').unpack('B8')[0]
+    end
+
+    def self.mvaddstr (window, y, x, string)
+        on = {
+            :bold      => false,
+            :reverse   => false,
+            :underline => false,
+        }
+
+        colorize = nil
+        type     = 0
+        current  = 0
+
+        string.each_char {|char|
+            if colorize || char == "\x03"
+                if char == "\x03"
+                    if colorize
+                        window.attroff UI.color(colorize)
+                        colorize = false
+                    else
+                        colorize = ['', '']
+                        type     = 0
+                    end
+                else
+                    if char == ','
+                        type = 1
+                    else
+                        if !char.match(/^\d$/)
+                            if color = UI.color(colorize)
+                                window.attron(color)
+                            end
+
+                            if colorize[1].empty? && type == 1
+                                window.mvaddstr(0, current, ',')
+                                current += 1
+                            end
+
+                            window.mvaddstr(0, current, char)
+                            current += 1
+                        else
+                            colorize[type] << char
+                        end
+                    end
+                end
+            elsif char == "\x02"
+                if on[:bold]
+                    window.attroff A_BOLD
+                    on[:bold] = false
+                else
+                    window.attron A_BOLD
+                    on[:bold] = true
+                end
+            elsif char == "\x16"
+                if on[:reverse]
+                    window.attroff A_REVERSE
+                    on[:reverse] = false
+                else
+                    window.attron A_REVERSE
+                    on[:reverse] = true
+                end
+            elsif char == "\x1F"
+                if on[:underline]
+                    window.attroff A_UNDERLINE
+                    on[:underline] = false
+                else
+                    window.attron A_UNDERLINE
+                    on[:underline] = true
+                end
+            else
+                window.mvaddstr(0, current, char)
+                current += 1
+            end
+        }
+
+        attrs = []
+        pair  = []
+
+        window.attr_get(attrs, pair, nil)
+        window.attroff(attrs.shift | pair.shift)
     end
 end
 
