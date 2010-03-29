@@ -63,9 +63,8 @@ class UI
             @raw.addstr "#{string}\n"
 
             if refresh
-                self.refresh
-
                 @UI.input.focus!
+                self.refresh
             end
         end
 
@@ -129,6 +128,8 @@ class UI
         end
     end
 
+    # I can't find a way to keep the focus on the input field without wasting cycles on
+    # non blocking getch.
     class Input
         attr_reader   :UI, :raw
         attr_accessor :utf8
@@ -144,14 +145,15 @@ class UI
         }
 
         def initialize (ui, options={})
-            @UI   = ui
-            @utf8 = true
+            @UI    = ui
+            @utf8  = true
 
             @cursor = 0
             @data   = String.new
 
             @raw = WINDOW.new(1, Ncurses.COLS, Ncurses.LINES - 1, 0)
             @raw.keypad true
+            @raw.nodelay true
         end
 
         def finalize
@@ -161,8 +163,21 @@ class UI
             { :x => @raw.getbegx, :y => @raw.getbegy }
         end
 
+        def size
+            { :width => @raw.getmaxx, :height => @raw.getmaxy }
+        end
+
         def focus!
             @raw.move 0, @cursor
+        end
+
+        def getch
+            while (result = @raw.getch) < 0 do
+                sleep 0.01
+                next
+            end
+
+            return result
         end
 
         def readChar
@@ -173,12 +188,12 @@ class UI
                 :value => nil,
             }
 
-            value = @raw.getch
+            value = self.getch
 
             if value == @@symbols[:ALT]
                 result[:ALT] = true
 
-                value = @raw.getch
+                value = self.getch
             end
 
             if value <= 26
@@ -267,18 +282,18 @@ class UI
 
                         when /^110/
                             result[:value].concat(value)
-                            result[:value].concat(@raw.getch)
+                            result[:value].concat(self.getch)
 
                         when /^1110/
                             result[:value].concat(value)
-                            result[:value].concat(@raw.getch)
-                            result[:value].concat(@raw.getch)
+                            result[:value].concat(self.getch)
+                            result[:value].concat(self.getch)
 
                         when /^11110/
                             result[:value].concat(value)
-                            result[:value].concat(@raw.getch)
-                            result[:value].concat(@raw.getch)
-                            result[:value].concat(@raw.getch)
+                            result[:value].concat(self.getch)
+                            result[:value].concat(self.getch)
+                            result[:value].concat(self.getch)
 
                         end
 
@@ -295,20 +310,20 @@ class UI
         end
 
         def readLine
-            line = String.new
-
             while char = self.readChar
-                # $UI.puts "#{char[:CTRL] ? 'CTRL ' : ''}#{char[:ALT] ? 'ALT ' : ''}#{char[:SHIFT] ? 'SHIFT ' : ''}#{char[:value]}"
-
                 if char[:value].is_a?(String) && !char[:ALT] && !char[:CTRL]
-                    line << self.put(char[:value])
-                    @cursor += 1
+                    self.put char[:value]
                 else
                     if char[:value] == :ENTER
+                        line = @data.clone
                         self.clear
                         break
                     elsif char[:value] == :BACKSPACE
-                        @data.sub!(/(.{#{@cursor}})./, '$1')
+                        if @data.length > 0
+                            @data.sub!(/^(.{#{@cursor > 0 ? @cursor - 1 : 0}})./, '\1')
+                            @cursor -= 1
+                            self.refresh
+                        end
                     else
                         @UI.fire(:button, char)
                     end
@@ -320,6 +335,7 @@ class UI
 
         def put (value)
             @data.insert(@cursor, value)
+            @cursor += 1
             self.refresh
 
             return value
@@ -335,9 +351,11 @@ class UI
 
         def refresh
             position = self.position
+            size     = self.size
 
             @raw.mvaddstr(0, 0, @data)
-            @raw.move(0, @cursor+1)
+            @raw.mvaddstr(0, @data.length, ' ' * (size[:width] - @data.length))
+            @raw.move(0, @cursor)
         end
 
         def self.bin (n)
