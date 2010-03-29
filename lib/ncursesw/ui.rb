@@ -131,8 +131,8 @@ class UI
     # I can't find a way to keep the focus on the input field without wasting cycles on
     # non blocking getch.
     class Input
-        attr_reader   :UI, :raw
-        attr_accessor :utf8
+        attr_reader   :UI, :raw, :history
+        attr_accessor :utf8, :max
 
         @@symbols = {
             :ALT       => 27,
@@ -146,10 +146,18 @@ class UI
 
         def initialize (ui, options={})
             @UI    = ui
-            @utf8  = true
+            @utf8  = (options[:utf8].nil?) ? true : options[:utf8]
 
-            @cursor = 0
-            @data   = String.new
+            @cursor  = 0
+            @data    = String.new
+            @history = []
+            @current = 0
+
+            if options[:max]
+                @max = options[:max]
+            else
+                @max = 42
+            end
 
             @raw = WINDOW.new(1, Ncurses.COLS, Ncurses.LINES - 1, 0)
             @raw.keypad true
@@ -315,18 +323,46 @@ class UI
                     self.put char[:value]
                 else
                     if char[:value] == :ENTER
-                        line = @data.clone
+                        if @history.length > @max
+                            @history.shift
+                        end
+
+                        @history.push @data.clone
+                        @UI.fire :input, @data.clone
+                        line     = @data.clone
+                        @current = @history.length
+
                         self.clear
                         break
                     elsif char[:value] == :BACKSPACE
                         if @data.length > 0
                             @data.sub!(/^(.{#{@cursor > 0 ? @cursor - 1 : 0}})./, '\1')
                             @cursor -= 1
-                            self.refresh
                         end
-                    else
-                        @UI.fire(:button, char)
+                    elsif char[:value] == :CANC
+                        if @cursor < @data.length
+                            @data.sub!(/^(.{#{@cursor}})./, '\1')
+                        end
+                    elsif char[:value] == :LEFT
+                        if @cursor > 0
+                            @cursor -= 1
+                        end
+                    elsif char[:value] == :RIGHT
+                        if @cursor < @data.length
+                            @cursor += 1
+                        end
+                    elsif char[:value] == :HOME
+                        @cursor = 0
+                    elsif char[:value] == :END
+                        @cursor = @data.length
+                    elsif char[:value] == :UP
+
+                    elsif char[:value] == :DOWN
                     end
+
+                    self.refresh
+                        
+                    @UI.fire(:button, char)
                 end
             end
 
@@ -354,8 +390,47 @@ class UI
             size     = self.size
 
             @raw.mvaddstr(0, 0, @data)
-            @raw.mvaddstr(0, @data.length, ' ' * (size[:width] - @data.length))
-            @raw.move(0, @cursor)
+            @raw.mvaddstr(0, Input.realLength(@data), ' ' * (size[:width] - Input.realLength(@data)))
+            @raw.move(0, Input.realCursor(@data, @cursor))
+        end
+
+        def self.realLength (string)
+            result = 0
+
+            string.each_char {|char|
+                char.force_encoding 'ASCII-8BIT'
+
+                if char.length > 1
+                    result += 2
+                else
+                    result += 1
+                end
+            }
+
+            return result
+        end
+
+        def self.realCursor (string, position)
+            result = 0
+            offset = 0
+
+            string.each_char {|char|
+                if offset >= position
+                    break
+                end
+
+                char.force_encoding 'ASCII-8BIT'
+
+                if char.length > 1
+                    result += 2
+                else
+                    result += 1
+                end
+
+                offset += 1
+            }
+
+            return result
         end
 
         def self.bin (n)
@@ -432,7 +507,7 @@ class UI
 
     def start
         loop do
-            self.fire(:input, @input.readLine)
+            @input.readLine
         end
     end
 
