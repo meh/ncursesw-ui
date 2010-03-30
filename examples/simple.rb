@@ -11,8 +11,14 @@ begin
             Process.exit! 0
         end
 
-        $UI.puts string.inspect
+        $UI.puts "#{string.inspect} [#{Ncurses::UI.outputLength(string)}]"
     }
+
+=begin
+    $UI.observe :button, lambda {|char|
+        $UI.puts char.inspect
+    }
+=end
 
     $UI.start
 rescue Exception => e
