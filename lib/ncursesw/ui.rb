@@ -24,6 +24,15 @@ class Proc
     end
 end
 
+require 'dl/import'
+
+module LibC
+    extend DL::Importer
+    
+    dlload 'libc.so.6'
+    extern 'int wcwidth (int)'
+end
+
 module Ncurses
 
 class UI
@@ -206,32 +215,23 @@ class UI
                 value = self.getch
             end
 
-            case value
+            if value < 32
+                result[:CTRL] = true
 
-            when 1 .. 26
                 if value == 10
-                    value = :ENTER
+                    value = 'ENTER'
                 elsif value == 9
-                    value = :TAB
-                else
-                    result[:CTRL] = true
+                    value = 'TAB'
+                elsif value < 26
                     value += 64
                     value = value.chr
+                else
+                    value = value.chr
                 end
-
-            when 31
-                result[:CTRL]  = true
-                value = '_'
-
             end
 
             if result[:CTRL]
-                if value.is_a?(String)
-                    result[:value] = value.to_sym
-                else
-                    result[:value] = value
-                end
-
+                result[:value] = value.to_sym
                 return result
             end
 
@@ -431,13 +431,21 @@ class UI
         end
 
         def put (value)
+            if value.length > 1
+                value.each_char {|char|
+                    self.put char
+                }
+
+                return
+            end
+
             if @position > @data.length
                 return
             end
 
             @data.insert(@position, value)
 
-            if !UI.isSpecial(@data)
+            if !UI.isSpecial(@data, @position)
                 @cursor += 1
             end
 
@@ -464,7 +472,7 @@ class UI
             length = UI.outputLength(@data)
 
             UI.mvaddstr(@raw, 0, 0, @data)
-            @raw.mvaddstr(0, length, ' ' * (size[:width] - length - @prompt.length))
+            @raw.mvaddstr(0, length, ' ' * (size[:width] - length - UI.outputLength(@prompt)))
             @raw.move(0, UI.outputCursor(@data, @cursor))
         end
 
@@ -782,13 +790,7 @@ class UI
         result = 0
 
         string.each_char {|char|
-            char.force_encoding 'ASCII-8BIT'
-
-            if char.length > 1
-                result += 2
-            else
-                result += 1
-            end
+            result += LibC.wcwidth(char.ord)
         }
 
         return result
@@ -804,14 +806,7 @@ class UI
                 break
             end
 
-            char.force_encoding 'ASCII-8BIT'
-
-            if char.length > 1
-                result += 2
-            else
-                result += 1
-            end
-
+            result += LibC.wcwidth(char.ord)
             offset += 1
         }
 
@@ -829,11 +824,9 @@ class UI
         end
 
         string.each_char {|char|
-            if offset == position + 1
+            if offset > position
                 break
             end
-
-            result += 1
 
             if colorize || char == "\x03" || char == "\x02" || char == "\x16" || char == "\x1F"
                 if char == "\x03"
@@ -859,6 +852,8 @@ class UI
                 end
 
                 next
+            else
+                result += 1
             end
 
             offset += 1
@@ -945,7 +940,7 @@ class UI
                 end
             else
                 window.mvaddstr(0, current, char)
-                current += 1
+                current += LibC.wcwidth(char.ord)
             end
         }
 
